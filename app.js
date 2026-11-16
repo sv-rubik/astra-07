@@ -1,4 +1,4 @@
-/* АСТРА • 07 — browser-local spacecraft simulator. No dependencies. */
+/* USCSS EREBUS • 07 — browser-local spacecraft simulator. No dependencies. */
 'use strict';
 (() => {
 const $ = id => document.getElementById(id);
@@ -7,29 +7,32 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const TAU = Math.PI * 2;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const destinations = [
- {name:'ЭЛИЗИЙ',x:326,y:112,z:44,map:[71,27],color:'#6ad4e9',hue:194,description:'Океанический мир. Бирюзовая атмосфера, островные архипелаги. На высокой орбите работает исследовательская станция.'},
- {name:'КЕПЛЕР',x:-148,y:275,z:-63,map:[39,20],color:'#ffbf76',hue:29,description:'Двойная звёздная система. Золотистый газовый гигант с тонкими кольцами. Сектор открыт для свободного полёта.'},
- {name:'АНТАРЕС',x:512,y:-243,z:98,map:[80,66],color:'#ff9a96',hue:5,description:'Красная звезда и пустынная планета. В поясе астероидов расположены учебные мишени для испытания вооружения.'},
- {name:'НОВА',x:-305,y:-182,z:216,map:[49,53],color:'#c0a8ff',hue:270,description:'Фиолетовая туманность на краю изученного пространства. Слабый сигнал маяка. Прекрасное место для нового маршрута.'},
- {name:'ВЕГА',x:89,y:402,z:-125,map:[17,37],color:'#a0edff',hue:211,description:'Холодный голубой гигант. Ледяная луна и тихая орбита. Сигнал дальней связи устойчивый.'}
+ {name:'SIRIUS 6B',x:-624,y:86,z:156,map:[16,76],color:'#b9d0d6',hue:205,description:'Домашняя база BLACKRIDGE. Каменистая поверхность, снег и пепел. На базе находятся гарнизон, ROVER-06 и центр дальней связи.'},
+ {name:'LV-426',x:326,y:112,z:44,map:[71,27],color:'#6ad4e9',hue:194,description:'Океанический мир. Бирюзовая атмосфера, островные архипелаги. На высокой орбите работает исследовательская станция.'},
+ {name:'LV-223',x:-148,y:275,z:-63,map:[39,20],color:'#ffbf76',hue:29,description:'Двойная звёздная система. Золотистый газовый гигант с тонкими кольцами. Сектор открыт для свободного полёта.'},
+ {name:'ACHERON',x:512,y:-243,z:98,map:[80,66],color:'#ff9a96',hue:5,description:'Красная звезда и пустынная планета. В поясе астероидов расположены учебные мишени для испытания вооружения.'},
+ {name:'ZETA RETICULI',x:-305,y:-182,z:216,map:[49,53],color:'#c0a8ff',hue:270,description:'Фиолетовая туманность на краю изученного пространства. Слабый сигнал дальней связи. Прекрасное место для нового маршрута.'},
+ {name:'ORIGA',x:89,y:402,z:-125,map:[17,37],color:'#a0edff',hue:211,description:'Холодный голубой гигант. Ледяная луна и тихая орбита. Сигнал дальней связи устойчивый.'}
 ];
 const targets = [
- {name:'ДРОН T-04',x:.62,y:.43,rx:.28,ry:-.25,kind:'drone'},
- {name:'МАЯК B-12',x:.42,y:.31,rx:-.32,ry:-.42,kind:'beacon'},
- {name:'ДРОН T-09',x:.73,y:.55,rx:.52,ry:.24,kind:'drone'},
- {name:'АСТЕРОИД A-3',x:.35,y:.52,rx:-.18,ry:.43,kind:'asteroid'}
+ {name:'DRN-04',x:.62,y:.43,rx:.28,ry:-.25,kind:'drone'},
+ {name:'RELAY-12',x:.42,y:.31,rx:-.32,ry:-.42,kind:'beacon'},
+ {name:'DRN-09',x:.73,y:.55,rx:.52,ry:.24,kind:'drone'},
+ {name:'AST-03',x:.35,y:.52,rx:-.18,ry:.43,kind:'asteroid'}
 ];
 const S = {
  thrust:71, speed:28400, mode:'cruise', heading:312.6, pitch:2, roll:-1,
- energy:[35,25,20,20], charge:87, shield:100, target:0, view:'flight',
+ energy:[35,15,10,20,15,5], charge:87, shield:100, target:0, view:'flight',
  toggles:{autopilot:true,shields:true,stabilizer:true,stealth:false},
- ammo:[true,true,true], slot:0, fireMode:'single', cover:false, firing:false,
- destination:null, mapSelected:destinations[0], current:{name:'ПРОКСИМА / 04',x:128,y:-57,z:9,hue:211},
+ ammo:[true,true,true], reloadAt:[0,0,0], slot:0, fireMode:'single', cover:false, firing:false,
+ destination:null, mapSelected:destinations[0], current:{name:'SOL / OUTER RIM',x:128,y:-57,z:9,hue:211},
  jump:null, scan:0, range:200000, sound:false, messages:[], emergency:false,
- burst:[], destroyedUntil:0, frame:0
+ burst:[], destroyedUntil:0, frame:0, distance:0, planetTravel:0
 };
-let audio, lastFrame=performance.now(), renderTimer=0, readoutTimer=0, radarAngle=0, lastPing=0;
+let lastFrame=performance.now(), renderTimer=0, readoutTimer=0, radarAngle=0, lastPing=0;
 let stars = [], planetsTexture;
+const sound = new ShipAudio();
+const baseCameras = new BaseCameras();
 
 function formatNumber(n){return Math.round(n).toLocaleString('ru-RU');}
 function signed(n){return (n>=0?'+':'−')+Math.abs(n);}
@@ -47,37 +50,29 @@ function log(message,notify=false){
  if(S.view==='journal')renderOverlay();
 }
 function beep(freq=680,duration=.08,type='sine',volume=.05,endFreq){
- if(!S.sound)return;
- try{
-  if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();
-  if(audio.state==='suspended')audio.resume().catch(()=>{});
-  const t=audio.currentTime,osc=audio.createOscillator(),gain=audio.createGain();
-  osc.type=type;osc.frequency.setValueAtTime(freq,t);
-  if(endFreq)osc.frequency.exponentialRampToValueAtTime(Math.max(20,endFreq),t+duration);
-  gain.gain.setValueAtTime(0,t);gain.gain.linearRampToValueAtTime(volume,t+.015);gain.gain.exponentialRampToValueAtTime(.001,t+duration);
-  osc.connect(gain);gain.connect(audio.destination);osc.start(t);osc.stop(t+duration+.02);
- }catch(_){/* Audio is optional. */}
+ // Compatibility for quiet telemetry cues; action sounds have dedicated layers.
+ if(S.sound)sound.play(freq<300?'impact':duration>.2?'scan':'switch',.35);
 }
-function clickSound(){beep(900,.04,'sine',.025,650);}
+function clickSound(){if(S.sound)sound.play('switch',.55);}
 function soundToggle(){
  S.sound=!S.sound;$('sound').setAttribute('aria-pressed',String(S.sound));
  $('sound').setAttribute('aria-label',S.sound?'Выключить звук':'Включить звук');
  $('sound').title=S.sound?'Выключить звук':'Включить звук';$('sound').innerHTML=`♫<span>ЗВУК ${S.sound?'ВКЛ':'ВЫКЛ'}</span>`;
- if(S.sound){beep(440,.12,'sine',.06);setTimeout(()=>beep(880,.12),110);}
+ sound.enable(S.sound);if(S.sound)sound.play('startup',.7);
 }
 
 // A common power bus: every control redistributes exactly 100 units.
 function allocate(index,value){
  const old=S.energy.slice();value=Math.round(clamp(value,0,85));
  const others=old.reduce((a,v,i)=>a+(i===index?0:v),0),remainder=100-value;
- const next=old.map((v,i)=>i===index?value:others>0?Math.floor(v/others*remainder):Math.floor(remainder/3));
+ const next=old.map((v,i)=>i===index?value:others>0?Math.floor(v/others*remainder):Math.floor(remainder/(old.length-1)));
  let delta=100-next.reduce((a,b)=>a+b,0);
- for(let k=1;delta>0;k=(k%3)+1){next[(index+k)%4]++;delta--;}
+ for(let k=1;delta>0;k=(k%(old.length-1))+1){next[(index+k)%old.length]++;delta--;}
  S.energy=next;updateEnergy();
 }
 function updateEnergy(){
- all('.energy-item').forEach((el,i)=>{
-  const value=S.energy[i],dial=el.querySelector('.dial');
+ all('.energy-item').forEach(el=>{
+  const i=+el.dataset.energyIndex,value=S.energy[i],dial=el.querySelector('.dial');
   el.querySelector('strong').innerHTML=`${value}<small>%</small>`;
   dial.style.setProperty('--angle',`${-135+value/85*270}deg`);
   dial.setAttribute('aria-valuenow',String(value));dial.setAttribute('aria-valuetext',`${value} процентов`);
@@ -85,10 +80,11 @@ function updateEnergy(){
  $('energy-total').textContent=S.energy.reduce((a,b)=>a+b,0);
 }
 function initDials(){
- const labels=['ДВИГАТЕЛИ','ЩИТЫ','ОРУЖИЕ','ГИПЕРДВИГ.'];
- $('energy-bank').innerHTML=labels.map((label,i)=>`<div class="energy-item"><small>${label}</small><div class="dial-wrap"><div class="dial" role="slider" tabindex="0" aria-label="Энергия: ${label}" aria-valuemin="0" aria-valuemax="85" aria-valuenow="${S.energy[i]}" data-energy="${i}"></div></div><strong>${S.energy[i]}<small>%</small></strong></div>`).join('');
- all('.dial').forEach((dial,i)=>{
-  let drag=null;
+ const labels=['ДВИГАТЕЛИ','ЩИТЫ','ВООРУЖЕН.','СИСТЕМЫ','НАУКА','СВЯЗЬ'];
+ const order=[0,3,1,2,4,5];
+ $('energy-bank').innerHTML=order.map(i=>{const label=labels[i];return `<div class="energy-item" data-energy-index="${i}"><small>${label}</small><div class="dial-wrap"><div class="dial" role="slider" tabindex="0" aria-label="Энергия: ${label}" aria-valuemin="0" aria-valuemax="85" aria-valuenow="${S.energy[i]}" data-energy="${i}"></div></div><strong>${S.energy[i]}<small>%</small></strong></div>`;}).join('');
+ all('.dial').forEach(dial=>{
+  const i=+dial.dataset.energy;let drag=null;
   dial.addEventListener('pointerdown',e=>{
    if(e.button!==0)return;drag={y:e.clientY,x:e.clientX,value:S.energy[i]};
    dial.setPointerCapture(e.pointerId);dial.focus();clickSound();e.preventDefault();
@@ -115,9 +111,11 @@ function selectTarget(index,notify=false){
  beep(1200,.08);if(notify)log(`Захват: ${target.name}. Учебная цель.`,true);
 }
 function renderAmmo(){
- $('weapon-list').innerHTML=S.ammo.map((loaded,i)=>`<button class="missile-slot ${S.slot===i?'selected ':''}${loaded?'':'spent'}" data-slot="${i}" aria-label="Ракета ${i+1}: ${loaded?'готова':'израсходована'}" aria-pressed="${S.slot===i}"><span>${i+1}</span><svg aria-hidden="true"><use href="#missile"/></svg><div>РАКЕТА М-7<small>${loaded?'● ГОТОВА':'○ ПУСТО'}</small></div></button>`).join('');
+ const now=performance.now();
+ $('weapon-list').innerHTML=S.ammo.map((loaded,i)=>{const secs=Math.max(0,Math.ceil((S.reloadAt[i]-now)/1000)),loading=!loaded&&secs>0;
+ return `<button class="missile-slot ${S.slot===i?'selected ':''}${loaded?'':loading?'reloading':'spent'}" data-slot="${i}" aria-label="Ракета ${i+1}: ${loaded?'готова':loading?'перезарядка '+secs+' секунд':'израсходована'}" aria-pressed="${S.slot===i}"><span>${i+1}</span><svg aria-hidden="true"><use href="#missile"/></svg><div>РАКЕТА М-7<small>${loaded?'● ГОТОВА':loading?'↻ '+secs+' СЕК':'○ ПУСТО'}</small></div></button>`;}).join('');
  all('[data-slot]').forEach(b=>b.addEventListener('click',()=>{
-  S.slot=+b.dataset.slot;renderAmmo();clickSound();toast(S.ammo[S.slot]?`Ракета ${S.slot+1} выбрана.`:'Слот пуст. Пополните боезапас.',!S.ammo[S.slot]);
+  S.slot=+b.dataset.slot;renderAmmo();clickSound();toast(S.ammo[S.slot]?`Ракета ${S.slot+1} выбрана.`:'Идёт автоматическая перезарядка. Можно ускорить кнопкой «Перезарядить».',!S.ammo[S.slot]);
  }));
 }
 function toggleCover(force){
@@ -136,18 +134,34 @@ function launch(){
  if(!slots.length)return toast('Нет готовых ракет. Выберите другой слот или пополните боезапас.',true);
  setView('flight');S.firing=true;const target={...targets[S.target]},start=performance.now();
  slots.forEach((slot,i)=>{
-  S.ammo[slot]=false;
+  S.ammo[slot]=false;S.reloadAt[slot]=start+6500+i*350;
   S.burst.push({type:'missile',start:start+i*300,duration:1900,x:target.x,y:target.y,side:slot-1,hit:false,target:target.name});
  });
- beep(80,.6,'sawtooth',.08,620);log(`${slots.length>1?'Залп':'Пуск'}: ${slots.length} × М-7. Цель: ${target.name}.`,true);renderAmmo();
+ if(S.sound)slots.forEach((_,i)=>setTimeout(()=>sound.play('launch',.85),i*300));log(`${slots.length>1?'Залп':'Пуск'}: ${slots.length} × М-7. Цель: ${target.name}.`,true);renderAmmo();
  setTimeout(()=>{S.firing=false;toggleCover(false);const next=S.ammo.findIndex(Boolean);if(next>=0)S.slot=next;renderAmmo();},slots.length*300+2100);
+}
+
+function reloadMissiles(){
+ if(S.jump||S.firing)return toast('Дождитесь завершения пуска или гиперперехода.',true);
+ if(S.ammo.every(Boolean))return toast('Все три ракеты уже готовы.');
+ const now=performance.now();S.ammo.forEach((loaded,i)=>{if(!loaded)S.reloadAt[i]=Math.min(S.reloadAt[i]||Infinity,now+2200+i*200);});
+ toggleCover(false);renderAmmo();if(S.sound)sound.play('reload',.8);log('Механизм подачи запущен. Ракеты возвращаются в пусковые ячейки.',true);
+}
+function updateReloads(now){
+ let changed=false;
+ S.reloadAt.forEach((deadline,i)=>{if(deadline&&now>=deadline){S.ammo[i]=true;S.reloadAt[i]=0;changed=true;log(`Ячейка ${i+1}: перезарядка завершена, ракета готова.`);}});
+ if(changed){if(!S.ammo[S.slot])S.slot=S.ammo.findIndex(Boolean);if(S.sound)sound.play('reload',.3);}
+ // Stable nodes between whole-second countdown changes preserve touch input.
+ const stamp=S.reloadAt.map((d,i)=>S.ammo[i]?'ready':Math.ceil(Math.max(0,d-now)/1000)).join('|');
+ if(changed||stamp!==updateReloads.stamp){updateReloads.stamp=stamp;renderAmmo();}
+ $('reload').textContent=S.ammo.every(Boolean)?'↻ ВСЕ РАКЕТЫ ГОТОВЫ':'↻ ПЕРЕЗАРЯДИТЬ';
 }
 
 function setMode(mode){
  S.mode=mode;const values={eco:28,cruise:71,boost:100};S.thrust=values[mode];$('thrust').value=S.thrust;
  all('[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));
  S.emergency=false;$('console').classList.remove('emergency');
- log(`Двигатели: ${ {eco:'экономичный режим',cruise:'крейсерский режим',boost:'форсаж'}[mode]}.`);clickSound();updateReadouts();
+ log(`Двигатели: ${ {eco:'экономичный режим',cruise:'крейсерский режим',boost:'форсаж'}[mode]}.`);if(S.sound)sound.play('startup',mode==='boost'?.9:.55);updateReadouts();
 }
 function toggleSystem(key){
  S.toggles[key]=!S.toggles[key];const on=S.toggles[key],b=document.querySelector(`[data-toggle="${key}"]`);
@@ -166,13 +180,14 @@ function openNav(){
  S.mapSelected=S.destination||destinations[0];if(!$('nav-dialog').open)$('nav-dialog').showModal();renderMap();clickSound();
 }
 function renderMap(){
- all('.map-star').forEach(el=>el.remove());
- destinations.forEach(d=>{
-  const b=document.createElement('button');b.className='map-star'+(S.mapSelected===d?' selected':'');
+ if(!$('star-map').querySelector('.map-star'))destinations.forEach(d=>{
+  const b=document.createElement('button');b.type='button';b.className='map-star';
   b.style.left=d.map[0]+'%';b.style.top=d.map[1]+'%';b.style.setProperty('--star-color',d.color);
   b.setAttribute('aria-label',`Выбрать ${d.name}`);b.innerHTML=`<i></i><span>${d.name}</span>`;
-  b.addEventListener('click',()=>{S.mapSelected=d;clickSound();renderMap();});$('star-map').append(b);
+  b.dataset.planet=d.name;b.addEventListener('click',()=>{S.mapSelected=d;clickSound();renderMap();});$('star-map').append(b);
  });
+ all('.map-star').forEach(b=>{const selected=b.dataset.planet===S.mapSelected.name;b.classList.toggle('selected',selected);b.setAttribute('aria-pressed',String(selected));});
+ const select=$('planet-select');if(!select.options.length)destinations.forEach(d=>select.add(new Option(d.name,d.name)));select.value=S.mapSelected.name;
  const d=S.mapSelected;$('map-name').textContent=d.name;$('map-description').textContent=d.description;
  $('map-coords').textContent=coordText(d);['x','y','z'].forEach(k=>$('coord-'+k).value=d[k]);
  const map=$('star-map'),a=d.map||[60,40],dx=(a[0]-25)*map.clientWidth/100,dy=(a[1]-77)*map.clientHeight/100;
@@ -188,13 +203,13 @@ function setCourse(destination){
 function jump(){
  if(S.jump)return;
  if(!S.destination)return openNav();
- if(S.charge<99.95)return toast(`Заряд ${Math.floor(S.charge)}%. Увеличьте энергию гипердвигателя для быстрой зарядки.`,true);
- if(S.energy[3]<5)return toast('Направьте хотя бы 5% энергии на гипердвигатель.',true);
+ if(S.charge<99.95)return toast(`Заряд ${Math.floor(S.charge)}%. Увеличьте мощность «Системы» для быстрой зарядки.`,true);
+ if(S.energy[3]<5)return toast('Направьте хотя бы 5% энергии на системы.',true);
  if(S.firing)return toast('Дождитесь завершения пуска ракет.',true);
  toggleCover(false);setView('flight');
  S.jump={start:performance.now(),destination:{...S.destination},duration:reducedMotion?5000:9500};
  S.charge=0;$('console').classList.add('jumping');$('jump-message').hidden=false;$('jump').disabled=true;$('coordinates').disabled=true;
- log(`Начат гиперпереход. Цель: ${S.destination.name}.`,true);beep(65,2.4,'sawtooth',.07,740);updateReadouts();
+ log(`Начат гиперпереход. Цель: ${S.destination.name}.`,true);if(S.sound)sound.play('charge',.85);updateReadouts();
 }
 function finishJump(){
  const destination=S.jump.destination;S.current=destination;S.destination=null;S.jump=null;S.destroyedUntil=0;S.burst=[];
@@ -202,50 +217,67 @@ function finishJump(){
  $('sector').textContent=destination.name;$('view-sector').textContent=destination.name+' / ОРБИТА';$('position').textContent=coordText(destination);
  $('footer-destination').textContent='ГАЛАКТИЧЕСКАЯ СЕТЬ / '+destination.name;$('destination-name').textContent='КУРС ЗАВЕРШЁН';
  createPlanet(destination.hue);selectTarget((S.target+1)%targets.length);log(`Выход из гиперпространства. Сектор ${destination.name}. ${coordText(destination)}.`,true);
- beep(840,.4,'sine',.06,420);updateReadouts();
+ S.planetTravel=0;if(S.sound)sound.play('arrival',.85);updateReadouts();
 }
 
 function setView(view){
  if(S.jump&&view!=='flight')return toast('Переключение экранов доступно после гиперперехода.',true);
+ if(view!=='cameras')$('console').classList.remove('cameras-expanded');
  S.view=view;all('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
- const names={flight:'⌖ НАВИГАЦИЯ / ОБЗОРНЫЙ МОНИТОР',navigation:'◎ АСТРОНАВИГАЦИЯ / МАРШРУТ',systems:'⚙ ДИАГНОСТИКА / СИСТЕМЫ',comms:'≋ ДАЛЬНЯЯ СВЯЗЬ',journal:'≡ БОРТОВОЙ ЖУРНАЛ'};
- $('monitor-title').textContent=names[view];$('screen-overlay').hidden=view==='flight';$('monitor-tag').textContent=view==='flight'?'LIVE FEED':'A07 / '+view.toUpperCase();
+ const names={flight:'⌖ НАВИГАЦИЯ / ПОЛЁТНЫЙ ПЛАН',navigation:'◎ АСТРОНАВИГАЦИЯ / МАРШРУТ',engines:'ϟ ДВИГАТЕЛИ / УПРАВЛЕНИЕ',energy:'ϟ ЭНЕРГЕТИЧЕСКАЯ ШИНА',science:'⚗ НАУЧНЫЙ МОДУЛЬ / СКАНИРОВАНИЕ',systems:'⚙ ДИАГНОСТИКА / СИСТЕМЫ',comms:'≋ ДАЛЬНЯЯ СВЯЗЬ',cameras:'▣ SIRIUS 6B / КАМЕРЫ БАЗЫ',journal:'≡ БОРТОВОЙ ЖУРНАЛ'};
+ $('monitor-title').textContent=names[view];$('screen-overlay').hidden=view==='flight';$('monitor-tag').textContent=view==='flight'?'LIVE FEED':'E07 / '+view.toUpperCase();
  renderOverlay();clickSound();
 }
 function escapeHTML(str){return String(str).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function renderOverlay(){
- const el=$('screen-overlay');if(S.view==='flight')return;
- let html='<div class="overlay-header"><small>A07 / ТЕРМИНАЛ КОМАНДИРА</small><button id="overlay-close" aria-label="Вернуться к полёту">×</button></div>';
+ const el=$('screen-overlay');el.classList.toggle('camera-mode',S.view==='cameras');if(S.view==='flight')return;
+ if(S.view==='cameras'){baseCameras.mount(el,clickSound);$('camera-close').addEventListener('click',()=>setView('flight'));return;}
+ let html='<div class="overlay-header"><small>E07 / ТЕРМИНАЛ КОМАНДИРА</small><button id="overlay-close" aria-label="Вернуться к полёту">×</button></div>';
  if(S.view==='navigation'){
   const d=S.destination;
   html+=`<h3>ПОЛЁТНЫЙ ПЛАН</h3><div class="nav-summary"><div class="nav-card"><small>ТЕКУЩИЙ СЕКТОР</small><b>${escapeHTML(S.current.name)}</b></div><div class="nav-card"><small>ПУНКТ НАЗНАЧЕНИЯ</small><b>${d?escapeHTML(d.name):'НЕ ВЫБРАН'}</b></div><div class="nav-card"><small>ТЕКУЩИЕ КООРДИНАТЫ</small><b style="font-size:10px">${coordText(S.current)}</b></div><div class="nav-card"><small>ЗАРЯД ГИПЕРДВИГАТЕЛЯ</small><b id="overlay-charge">${Math.floor(S.charge)}%</b></div></div><p>${d?escapeHTML(d.description):'Выберите звезду в каталоге или введите координаты. После полной зарядки гипердвигателя можно начать переход.'}</p><br><button id="overlay-map" class="primary-button">ОТКРЫТЬ ЗВЁЗДНУЮ КАРТУ ↗</button>`;
+ }else if(S.view==='engines'){
+  html+=`<h3>ДВИГАТЕЛЬНЫЙ КОНТУР</h3><p>Мощность: ${S.energy[0]}%. Текущая скорость: ${formatNumber(S.speed)} км/ч.<br>Изменение тяги видно на обзорном мониторе и слышно по работе турбин.</p><label class="engine-overlay-label">ТЯГА <input id="overlay-thrust" type="range" min="0" max="100" value="${S.thrust}" aria-label="Тяга на экране двигателей"></label><div class="comms-buttons"><button data-engine-mode="eco">ЭКО</button><button data-engine-mode="cruise">КРЕЙСЕР</button><button data-engine-mode="boost">ФОРСАЖ</button><button id="return-flight">ВЕРНУТЬСЯ К ПОЛЁТУ →</button></div>`;
+ }else if(S.view==='energy'){
+  html+='<h3>РАСПРЕДЕЛЕНИЕ ЭНЕРГИИ</h3>'+S.energy.map((v,i)=>`<div class="system-row"><span>${['ДВИГАТЕЛИ','ЩИТЫ','ОРУЖИЕ','СИСТЕМЫ / ГИПЕРДВИГ.','НАУКА','СВЯЗЬ'][i]}</span><i><em style="width:${v}%"></em></i><b>${v}%</b></div>`).join('')+'<p style="margin-top:18px">Общая мощность — 100%. Поверните регуляторы под экраном. Контур «Системы» питает гипердвигатель. «Наука» влияет на сканирование, «Связь» — на скорость ответа базы.</p><br><button id="overlay-balance" class="primary-button">СБАЛАНСИРОВАТЬ ШИНУ</button>';
+ }else if(S.view==='science'){
+  html+=`<h3>АНАЛИЗ СЕКТОРА</h3><div class="nav-summary"><div class="nav-card"><small>СИСТЕМА</small><b>${escapeHTML(S.current.name)}</b></div><div class="nav-card"><small>ОБЪЕКТЫ</small><b>4 КОНТАКТА</b></div></div><p>Датчики отслеживают учебные дроны, ретранслятор и обломки. Сканирование обновляет номер прохода на радаре.</p><br><button id="science-scan" class="primary-button">ЗАПУСТИТЬ СКАНИРОВАНИЕ</button>`;
  }else if(S.view==='systems'){
   const rows=[['ЦЕЛОСТНОСТЬ КОРПУСА',100],['ЖИЗНЕОБЕСПЕЧЕНИЕ',100],['ЗАЩИТНЫЕ ЭКРАНЫ',Math.round(S.shield)],['МОЩНОСТЬ ДВИГАТЕЛЕЙ',S.energy[0]],['ЭНЕРГИЯ ВООРУЖЕНИЯ',S.energy[2]],['ЗАРЯД ГИПЕРДВИГАТЕЛЯ',Math.floor(S.charge)]];
   html+='<h3>ДИАГНОСТИКА КОРАБЛЯ</h3>'+rows.map(([name,value],i)=>`<div class="system-row"><span>${name}</span><i><em style="width:${value}%" data-sysbar="${i}"></em></i><b data-sysvalue="${i}">${value}%</b></div>`).join('');
  }else if(S.view==='comms'){
-  html+='<h3>ДАЛЬНЯЯ СВЯЗЬ</h3><p>КАНАЛ 07.12 / ЗАЩИЩЁННЫЙ ДИАПАЗОН<br>Доступны станция, навигационный маяк и общий канал.</p><div class="comms-buttons"><button data-comms="station">ВЫЗВАТЬ СТАНЦИЮ</button><button data-comms="beacon">ЗАПРОСИТЬ МАЯК</button><button data-comms="distress">ТЕСТ SOS</button></div><div class="comms-message" id="comms-message">Ожидание передачи. Выберите канал связи.</div>';
+  html+='<h3>ДАЛЬНЯЯ СВЯЗЬ</h3><p>КАНАЛ 07.12 / ЗАЩИЩЁННЫЙ ДИАПАЗОН<br>Доступны станция, дальний ретранслятор и общий канал.</p><div class="comms-buttons"><button data-comms="station">ВЫЗВАТЬ СТАНЦИЮ</button><button data-comms="beacon">ЗАПРОСИТЬ РЕТРАНСЛЯТОР</button><button data-comms="distress">ТЕСТ SOS</button></div><div class="comms-message" id="comms-message">Ожидание передачи. Выберите канал связи.</div>';
  }else if(S.view==='journal'){
   html+='<h3>БОРТОВОЙ ЖУРНАЛ</h3>'+S.messages.map(m=>`<div class="journal-row"><time>${m.time.slice(0,5)}</time><span>${escapeHTML(m.text)}</span></div>`).join('');
  }
  el.innerHTML=html;$('overlay-close').addEventListener('click',()=>setView('flight'));
  if($('overlay-map'))$('overlay-map').addEventListener('click',openNav);
+ if($('overlay-thrust'))$('overlay-thrust').addEventListener('input',e=>{S.thrust=+e.target.value;$('thrust').value=S.thrust;S.emergency=false;$('console').classList.remove('emergency');updateReadouts();});
+ all('[data-engine-mode]').forEach(b=>b.addEventListener('click',()=>{setMode(b.dataset.engineMode);renderOverlay();}));
+ if($('return-flight'))$('return-flight').addEventListener('click',()=>setView('flight'));
+ if($('overlay-balance'))$('overlay-balance').addEventListener('click',()=>{$('balance').click();renderOverlay();});
+ if($('science-scan'))$('science-scan').addEventListener('click',()=>{$('scan').click();setView('flight');});
  all('[data-comms]').forEach(b=>b.addEventListener('click',()=>{
-  const kind=b.dataset.comms,answers={station:`«Астра-07», это орбитальная станция. Видим вас в секторе ${S.current.name}. Системы работают штатно. Свободный полёт разрешён.`,beacon:`Маяк активен. Ваши координаты: ${coordText(S.current)}. Каталог маршрутов синхронизирован. Счастливого пути, «Астра».`,distress:'Учебный сигнал SOS принят. Проверка аварийного канала завершена. Настоящий сигнал бедствия не передавался.'};
+  if(S.energy[5]<1)return toast('Направьте энергию на связь.',true);
+  const kind=b.dataset.comms,answers={station:`«Erebus-07», это орбитальная станция. Видим вас в секторе ${S.current.name}. Системы работают штатно. Свободный полёт разрешён.`,beacon:`Ретранслятор активен. Ваши координаты: ${coordText(S.current)}. Каталог маршрутов синхронизирован. Счастливого пути, «Erebus».`,distress:'Учебный сигнал SOS принят. Проверка аварийного канала завершена. Настоящий сигнал бедствия не передавался.'};
   $('comms-message').textContent='УСТАНОВКА СОЕДИНЕНИЯ…';all('[data-comms]').forEach(x=>x.disabled=true);beep(1200,.1,'triangle');
-  setTimeout(()=>{if($('comms-message')){$('comms-message').textContent=answers[kind];all('[data-comms]').forEach(x=>x.disabled=false);}log('Принят ответ: '+{station:'орбитальная станция',beacon:'навигационный маяк',distress:'проверка SOS'}[kind]+'.');beep(700,.1);},1100);
+  setTimeout(()=>{if($('comms-message')){$('comms-message').textContent=answers[kind];all('[data-comms]').forEach(x=>x.disabled=false);}log('Принят ответ: '+{station:'орбитальная станция',beacon:'дальний ретранслятор',distress:'проверка SOS'}[kind]+'.');beep(700,.1);},clamp(1100*5/S.energy[5],450,5500));
  }));
 }
 
 function emergencyStop(){
  if(S.jump){toast('Аварийная остановка будет выполнена на выходе из гиперпространства.',true);S.emergency=true;return;}
  S.thrust=0;$('thrust').value=0;S.mode='eco';S.emergency=true;S.pitch=0;S.roll=0;$('pitch').value=0;$('roll').value=0;
- S.energy=[15,55,10,20];updateEnergy();
+ S.energy=[10,45,5,25,10,5];updateEnergy();
  ['shields','stabilizer','autopilot'].forEach(k=>{if(!S.toggles[k])toggleSystem(k);});if(S.toggles.stealth)toggleSystem('stealth');
  toggleCover(false);all('[data-mode]').forEach(b=>b.classList.remove('active'));$('console').classList.add('emergency');
  log('Аварийный стоп. Тяга снята, энергия направлена на щиты. Для продолжения выберите режим двигателя.',true);beep(220,.4,'triangle',.07);updateReadouts();
 }
 
 function updateReadouts(){
+ $('distance-flown').textContent=S.distance.toFixed(1)+' КМ';
+ $('viewport').dataset.motionSpeed=S.speed.toFixed(1);
+ $('console').style.setProperty('--engine-force',String(clamp(S.speed/40000,0,1.5)));
  $('speed').textContent=S.jump?'ГИПЕР':formatNumber(S.speed);
  $('thrust-value').textContent=S.thrust+'%';$('heading').textContent=S.heading.toFixed(1)+'°';
  $('pitch-display').textContent=signed(S.pitch)+'.0°';$('roll-display').textContent=signed(S.roll)+'.0°';
@@ -255,6 +287,7 @@ function updateReadouts(){
  ['main','maneuver','stable'].forEach((key,i)=>{$(key+'-value').textContent=gauges[i];$('gauge-'+key).style.setProperty('--gauge',gauges[i]*.75+'%');});
  $('engine-state').textContent=S.emergency?'ОСТАНОВЛЕН':S.mode==='boost'?'ФОРСАЖ':S.mode==='eco'?'ЭКОНОМИЧНЫЙ ХОД':'КРЕЙСЕРСКИЙ ХОД';
  $('shield-percent').textContent=Math.round(S.shield)+'%';$('shield-small').textContent=Math.round(S.shield)+'%';
+ $('shield-bars').style.opacity=String(.2+S.shield/125);
  $('charge').textContent=Math.floor(S.charge);$('charge-bar').style.width=S.charge+'%';
  $('hyper-state').textContent=S.jump?'ПЕРЕХОД':S.charge>=99.95?'ГОТОВ':S.energy[3]===0?'НЕТ ЭНЕРГИИ':'ЗАРЯДКА';
  $('jump-hint').textContent=S.jump?'ПЕРЕХОД В ГИПЕРПРОСТРАНСТВЕ':!S.destination?'ВЫБЕРИТЕ КООРДИНАТЫ НА КАРТЕ':S.charge<99.95?`${S.destination.name} · ЗАРЯДКА ${Math.floor(S.charge)}%`:`${S.destination.name} · ПРЫЖОК РАЗРЕШЁН`;
@@ -305,22 +338,27 @@ function drawSpace(t,dt){
  c.fillStyle='#020711';c.fillRect(0,0,w,h);
  const neb=c.createRadialGradient(w*.68,h*.28,0,w*.68,h*.28,w*.7);neb.addColorStop(0,`hsla(${hue},55%,35%,.16)`);neb.addColorStop(.45,`hsla(${hue+15},50%,16%,.09)`);neb.addColorStop(1,'transparent');c.fillStyle=neb;c.fillRect(0,0,w,h);
  if(S.jump){drawJump(c,w,h,t);return;}
- const drift=S.thrust*.00002*(S.toggles.stealth?.35:1),cx=w*.5,cy=h*.45;
+ const cx=w*.5,cy=h*.45;
  c.save();c.translate(cx,cy);c.rotate(S.roll*Math.PI/180*.3);c.translate(-cx,-cy+S.pitch*.3);
  for(const star of stars){
-  if(!reducedMotion){star.x-=dt*drift*(star.z+.25);if(star.x<0)star.x=1;}
-  const alpha=(.35+star.z*.6)*(reducedMotion?1:.8+Math.sin(t*.0007+star.phase)*.2);
-  c.fillStyle=`rgba(${160+Math.round(star.z*70)},${200+Math.round(star.z*40)},255,${alpha})`;
-  c.beginPath();c.arc(star.x*w,star.y*h,star.r*(star.z+.4),0,TAU);c.fill();
-  if(star.z>.94){c.fillStyle='#b9e8ff10';c.fillRect(star.x*w-4,star.y*h-.3,8,.6);}
+  const dz=reducedMotion?0:dt*clamp(S.speed/40000,0,2)*.22;
+  star.z-=dz;
+  let sx=cx+(star.x-.5)*w*.8/(star.z+.12),sy=cy+(star.y-.5)*h*.8/(star.z+.12);
+  if(star.z<.03||sx<0||sx>w||sy<0||sy>h){star.z=1;star.x=Math.random();star.y=Math.random();sx=cx+(star.x-.5)*w*.8/1.12;sy=cy+(star.y-.5)*h*.8/1.12;}
+  const alpha=clamp(1.1-star.z*.65,.25,1),radius=star.r*(1.15-star.z*.6);
+  c.fillStyle=`rgba(180,224,255,${alpha})`;c.beginPath();c.arc(sx,sy,radius,0,TAU);c.fill();
+  if(dz>0){const tail=Math.min(dz*2.2,.035),px=cx+(star.x-.5)*w*.8/(star.z+tail+.12),py=cy+(star.y-.5)*h*.8/(star.z+tail+.12);
+   c.strokeStyle=`rgba(142,216,255,${alpha*.5})`;c.lineWidth=Math.max(.4,radius*.6);c.beginPath();c.moveTo(px,py);c.lineTo(sx,sy);c.stroke();}
  }
  if(planetsTexture){
-  const size=w*.66,x=-size*.31,y=h*.66;
+  const size=w*(.66+S.planetTravel*.15),x=-size*.31-S.planetTravel*w*.04,y=h*.66-S.planetTravel*h*.05;
   const atm=c.createRadialGradient(x+size/2,y+size/2,size*.465,x+size/2,y+size/2,size*.5);atm.addColorStop(0,'transparent');atm.addColorStop(.65,`hsla(${hue},70%,63%,.18)`);atm.addColorStop(1,'transparent');c.fillStyle=atm;c.fillRect(x,y,size,size);
   c.drawImage(planetsTexture,x,y,size,size);
  }
  // Distant orbital body and a navigation arc.
- c.strokeStyle='#8adfff15';c.lineWidth=.7;c.beginPath();c.ellipse(w*.55,h*.6,w*.52,h*.36,-.28,Math.PI,TAU);c.stroke();
+ c.strokeStyle='#8adfff44';c.lineWidth=.6;
+ for(let orbit=1;orbit<=4;orbit++){c.beginPath();c.ellipse(w*.53,h*.52,w*(.18+orbit*.10),h*(.16+orbit*.075),-.24,0,TAU);c.stroke();}
+ c.save();c.setLineDash([3,5]);c.strokeStyle='#b9efff99';c.lineWidth=1.2;c.beginPath();c.moveTo(w*.31,h*.62);c.bezierCurveTo(w*.50,h*.62,w*.56,h*.34,w*.79,h*.22);c.stroke();c.restore();
  const moon=c.createRadialGradient(w*.79-3,h*.21-3,0,w*.79,h*.21,11);moon.addColorStop(0,'#a1b6c7');moon.addColorStop(.5,'#42516a');moon.addColorStop(1,'#040914');c.fillStyle=moon;c.beginPath();c.arc(w*.79,h*.21,11,0,TAU);c.fill();
  // Training targets: model silhouettes are visible before and after firing.
  if(t>S.destroyedUntil){targets.forEach((target,i)=>{
@@ -348,7 +386,7 @@ function drawSpace(t,dt){
    c.fillStyle='#fff1cc';c.beginPath();c.arc(x,y,Math.max(1,3*(1-p)),0,TAU);c.fill();c.restore();
    if(p>=1){
     effect.type='explosion';effect.start=t;effect.duration=1400;S.destroyedUntil=t+5000;
-    log(`Попадание: ${effect.target}. Учебная цель поражена.`,true);beep(100,.5,'sawtooth',.07,30);
+    log(`Попадание: ${effect.target}. Учебная цель поражена.`,true);if(S.sound)sound.play('impact',.75);
    }live.push(effect);
   }else{
    const p=age/effect.duration;if(p<1){
@@ -384,20 +422,20 @@ function drawJump(c,w,h,t){
   }}
  }
  if(p>.2&&p<.25||p>.9){const flash=p>.9?(p-.9)*5:Math.sin((p-.2)/.05*Math.PI)*.6;c.fillStyle=`rgba(205,239,255,${flash})`;c.fillRect(0,0,w,h);}
- if(p>.37&&!S.jump.sounded){S.jump.sounded=true;beep(650,1.4,'sine',.07,65);}
+ if(p>.37&&!S.jump.sounded){S.jump.sounded=true;if(S.sound)sound.play('transit',.9);}
 }
 function drawRadar(t,dt){
  const v=canvases.radar;if(!v)return;const{ctx:c,w,h}=v,cx=w*.5,cy=h*.5,r=Math.min(w*.43,h*.45);
- c.clearRect(0,0,w,h);const grid='#5db8da33';
+ c.clearRect(0,0,w,h);const grid='#70cce877';
  c.save();c.translate(cx,cy);c.strokeStyle=grid;c.lineWidth=.6;
  for(let i=1;i<=4;i++){c.beginPath();c.arc(0,0,r*i/4,0,TAU);c.stroke();}
  for(let i=0;i<12;i++){const a=i/12*TAU;c.beginPath();c.moveTo(0,0);c.lineTo(Math.cos(a)*r,Math.sin(a)*r);c.stroke();}
- c.strokeStyle='#8bd8ef66';c.beginPath();c.arc(0,0,r+4,0,TAU);c.stroke();
+ c.strokeStyle='#b4ecffaa';c.beginPath();c.arc(0,0,r+4,0,TAU);c.stroke();
  for(let i=0;i<60;i++){const a=i/60*TAU,rr=r+4;c.beginPath();c.moveTo(Math.cos(a)*rr,Math.sin(a)*rr);c.lineTo(Math.cos(a)*(rr+(i%5===0?4:2)),Math.sin(a)*(rr+(i%5===0?4:2)));c.stroke();}
  if(!S.jump){
   if(!reducedMotion)radarAngle=(radarAngle+dt*(S.scan>t?2.8:.55))%TAU;
   for(let i=0;i<45;i++){
-   const a=radarAngle-i*.018;c.beginPath();c.moveTo(0,0);c.arc(0,0,r,a-.019,a);c.closePath();c.fillStyle=`rgba(98,220,255,${(1-i/45)*.08})`;c.fill();
+   const a=radarAngle-i*.018;c.beginPath();c.moveTo(0,0);c.arc(0,0,r,a-.019,a);c.closePath();c.fillStyle=`rgba(98,220,255,${(1-i/45)*.17})`;c.fill();
   }
   c.strokeStyle='#a6edff99';c.beginPath();c.moveTo(0,0);c.lineTo(Math.cos(radarAngle)*r,Math.sin(radarAngle)*r);c.stroke();
   targets.forEach((target,i)=>{
@@ -412,25 +450,27 @@ function drawRadar(t,dt){
  }
  c.globalAlpha=1;c.fillStyle='#bcf0ff';c.beginPath();c.moveTo(0,-5);c.lineTo(3,4);c.lineTo(0,2);c.lineTo(-3,4);c.closePath();c.fill();
  c.restore();
- if(S.scan>t){const p=1-(S.scan-t)/2500;c.strokeStyle=`rgba(165,232,255,${1-p})`;c.lineWidth=2;c.beginPath();c.arc(cx,cy,p*r,0,TAU);c.stroke();}
+ if(S.scan>t){const p=clamp(1-(S.scan-t)/8000,0,1);c.strokeStyle=`rgba(165,232,255,${1-p})`;c.lineWidth=2;c.beginPath();c.arc(cx,cy,p*r,0,TAU);c.stroke();}
 }
 function drawTelemetry(t){
  const v=canvases.spectrum;if(v){const{ctx:c,w,h}=v;c.clearRect(0,0,w,h);const bars=38;
   for(let i=0;i<bars;i++){const level=(Math.sin(i*1.7+t*.003)+Math.cos(i*.48-t*.002)+2)/4;c.fillStyle=i%5===0?'#c5edfa':'#5894af';const hh=(.1+level*.9)*h;c.fillRect(i*w/bars,h-hh,w/bars-1.5,hh);}
  }
+ const wave=canvases.wave;if(wave){const{ctx:c,w,h}=wave;c.clearRect(0,0,w,h);c.strokeStyle='#9aeaff';c.lineWidth=1;c.beginPath();for(let x=0;x<w;x++){const y=h*.5+Math.sin(x*.11+t*.002)*h*.16+Math.sin(x*.31-t*.004)*h*.08;x?c.lineTo(x,y):c.moveTo(x,y);}c.stroke();}
 }
 function tick(t){
  const dt=Math.min((t-lastFrame)/1000,1);lastFrame=t;S.frame++;
  if(!S.jump){
   const targetSpeed=S.thrust/71*28400*(.55+S.energy[0]/35*.45)*(S.toggles.stealth?.5:1);
-  S.speed+=(targetSpeed-S.speed)*Math.min(1,dt*.65);
+  S.speed+=(targetSpeed-S.speed)*(1-Math.exp(-dt*1.8));if(S.thrust===0&&S.speed<.5)S.speed=0;
+  S.distance+=S.speed/3600*dt;S.planetTravel=Math.min(.9,S.planetTravel+S.speed/40000*dt*.004);
   if(S.charge<100&&S.energy[3]>0)S.charge=Math.min(100,S.charge+dt*S.energy[3]/20*(S.toggles.shields?.55:1.05));
   if(!S.toggles.autopilot)S.heading=(S.heading+S.roll*dt*.02+360)%360;
  }
- const shieldTarget=S.toggles.shields?clamp(S.energy[1]*4,0,100):0;S.shield+=(shieldTarget-S.shield)*dt*.8;
+ const shieldTarget=S.toggles.shields?clamp(S.energy[1]*100/15,0,100):0;S.shield+=(shieldTarget-S.shield)*dt*.8;
  // Limit painting to 30 fps without changing simulation speed.
- renderTimer+=dt;if(renderTimer>1/30){renderTimer=0;drawSpace(t,dt*2);drawRadar(t,dt*2);drawTelemetry(t);}
- readoutTimer+=dt;if(readoutTimer>=.2){readoutTimer=0;updateReadouts();$('clock').textContent=new Date().toLocaleTimeString('ru-RU',{timeZone:'UTC'});}
+ renderTimer+=dt;if(renderTimer>=1/30){const paintDt=renderTimer;renderTimer=0;drawSpace(t,paintDt);drawRadar(t,paintDt);drawTelemetry(t);if(S.view==='cameras')baseCameras.draw(t,reducedMotion);}
+ readoutTimer+=dt;if(readoutTimer>=.2){readoutTimer=0;updateReadouts();updateReloads(t);sound.update(S.speed,S.thrust,!!S.jump,S.toggles.stealth);$('clock').textContent=new Date().toLocaleTimeString('ru-RU',{timeZone:'UTC'});}
  requestAnimationFrame(tick);
 }
 
@@ -453,20 +493,18 @@ $('radar').addEventListener('click',e=>{
 });
 $('scan').addEventListener('click',()=>{
  if(S.jump)return toast('Радар недоступен в гиперпространстве.',true);
- S.scan=performance.now()+2500;$('scan').textContent='СКАНИРОВАНИЕ…';$('scan').disabled=true;beep(450,.3,'sine',.04,1400);
- log('Сканирование сектора начато.');setTimeout(()=>{$('scan').textContent='СКАНИРОВАТЬ';$('scan').disabled=false;$('scan-id').textContent=String(Number($('scan-id').textContent)+1).padStart(2,'0');log('Сканирование завершено. Обнаружены 4 учебных объекта.',true);},2500);
+ if(S.energy[4]<3)return toast('Для сканирования нужно хотя бы 3% энергии научного модуля.',true);
+ const scanDuration=clamp(2500*15/S.energy[4],900,8000);S.scan=performance.now()+scanDuration;$('scan').textContent='СКАНИРОВАНИЕ…';$('scan').disabled=true;beep(450,.3,'sine',.04,1400);
+ log('Сканирование сектора начато.');setTimeout(()=>{$('scan').textContent='СКАНИРОВАТЬ';$('scan').disabled=false;$('scan-id').textContent=String(Number($('scan-id').textContent)+1).padStart(2,'0');log('Сканирование завершено. Обнаружены 4 учебных объекта.',true);},scanDuration);
 });
 function changeRange(direction){S.range=clamp(S.range*(direction>0?2:.5),50000,800000);$('radar-range').textContent=formatNumber(S.range)+' КМ';clickSound();toast('Дальность радара: '+formatNumber(S.range)+' км.');}
 $('range-down').addEventListener('click',()=>changeRange(-1));$('range-up').addEventListener('click',()=>changeRange(1));
 $('cover').addEventListener('click',()=>toggleCover());$('launch').addEventListener('click',launch);
-$('reload').addEventListener('click',()=>{
- if(S.jump||S.firing)return toast('Дождитесь завершения текущего манёвра.',true);
- if(S.ammo.every(Boolean))return toast('Все три ракеты уже готовы.');
- S.ammo=[true,true,true];S.slot=0;renderAmmo();toggleCover(false);log('Боезапас пополнен: 3 × М-7.',true);beep(500,.15,'triangle');
-});
-$('balance').addEventListener('click',()=>{S.energy=[25,25,25,25];updateEnergy();log('Энергия распределена поровну: 25% на систему.',true);clickSound();});
+$('reload').addEventListener('click',reloadMissiles);
+$('balance').addEventListener('click',()=>{S.energy=[35,15,10,20,15,5];updateEnergy();log('Восстановлено штатное распределение энергии: 35 / 20 / 15 / 10 / 15 / 5%.',true);clickSound();});
 $('coordinates').addEventListener('click',openNav);$('close-nav').addEventListener('click',()=>$('nav-dialog').close());
 $('set-course').addEventListener('click',()=>setCourse(S.mapSelected));
+$('planet-select').addEventListener('change',e=>{const d=destinations.find(x=>x.name===e.target.value);if(d){S.mapSelected=d;renderMap();clickSound();}});
 $('coord-form').addEventListener('submit',e=>{
  e.preventDefault();const values=['x','y','z'].map(k=>Number($('coord-'+k).value));
  if(values.some(v=>!Number.isFinite(v)||v<-999||v>999||!Number.isInteger(v)))return toast('Введите целые координаты от −999 до +999.',true);
@@ -485,7 +523,7 @@ document.addEventListener('keydown',e=>{
  if($('help-dialog').open||$('nav-dialog').open)return;
  if(e.key.toLowerCase()==='n')openNav();if(e.key.toLowerCase()==='j')jump();if(e.key.toLowerCase()==='m')soundToggle();
 });
-document.addEventListener('visibilitychange',()=>{lastFrame=performance.now();});
+document.addEventListener('visibilitychange',()=>{lastFrame=performance.now();sound.setHidden(document.hidden);});
 initStars();createPlanet(211);initDials();renderAmmo();selectTarget(0);sizeCanvases();updateReadouts();$('clock').textContent=time();
 log('Мостик готов. Командование передано вам.');log('Учебный сектор: оружие разрешено. Выберите координаты для гиперперехода.');
 requestAnimationFrame(tick);
