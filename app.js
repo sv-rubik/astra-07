@@ -12,7 +12,8 @@ const destinations = [
  {name:'LV-223',x:-148,y:275,z:-63,map:[39,20],color:'#ffbf76',hue:29,description:'Двойная звёздная система. Золотистый газовый гигант с тонкими кольцами. Сектор открыт для свободного полёта.'},
  {name:'ACHERON',x:512,y:-243,z:98,map:[80,66],color:'#ff9a96',hue:5,description:'Красная звезда и пустынная планета. В поясе астероидов расположены учебные мишени для испытания вооружения.'},
  {name:'ZETA RETICULI',x:-305,y:-182,z:216,map:[49,53],color:'#c0a8ff',hue:270,description:'Фиолетовая туманность на краю изученного пространства. Слабый сигнал дальней связи. Прекрасное место для нового маршрута.'},
- {name:'ORIGA',x:89,y:402,z:-125,map:[17,37],color:'#a0edff',hue:211,description:'Холодный голубой гигант. Ледяная луна и тихая орбита. Сигнал дальней связи устойчивый.'}
+ {name:'GARGANTUA',x:-810,y:640,z:299,map:[90,43],color:'#ffd6a0',hue:35,blackHole:true,description:'Сверхмассивная чёрная дыра. Аккреционный диск, гравитационное линзирование и дальняя наблюдательная орбита. Автопилот удерживает безопасную дистанцию.'},
+ {name:'ORIGA',x:89,y:402,z:-125,map:[17,37],color:'#a0edff',hue:211,description:'Ледяной мир. Голубая поверхность, тёмные разломы и тихая орбита. Сигнал дальней связи устойчивый.'}
 ];
 const targets = [
  {name:'DRN-04',x:.62,y:.43,rx:.28,ry:-.25,kind:'drone'},
@@ -27,10 +28,11 @@ const S = {
  ammo:[true,true,true], reloadAt:[0,0,0], slot:0, fireMode:'single', cover:false, firing:false,
  destination:null, mapSelected:destinations[0], current:{name:'SOL / OUTER RIM',x:128,y:-57,z:9,hue:211},
  jump:null, scan:0, range:200000, sound:false, messages:[], emergency:false,
- burst:[], destroyedUntil:0, frame:0, distance:0, planetTravel:0
+ burst:[], destroyedUntil:0, frame:0, distance:0, orbit:null, scanDuration:2500
 };
 let lastFrame=performance.now(), renderTimer=0, readoutTimer=0, radarAngle=0, lastPing=0;
-let stars = [], planetsTexture;
+let stars = [];
+const flightScene = new FlightScene();
 const sound = new ShipAudio();
 const baseCameras = new BaseCameras();
 
@@ -38,20 +40,16 @@ function formatNumber(n){return Math.round(n).toLocaleString('ru-RU');}
 function signed(n){return (n>=0?'+':'−')+Math.abs(n);}
 function coordText(d){return `X ${signed(d.x)} · Y ${signed(d.y)} · Z ${signed(d.z)}`;}
 function time(){return new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});}
-function toast(message,warning=false){
- const el=document.createElement('div');el.className='toast'+(warning?' warning':'');el.textContent=message;
- $('toasts').append(el);setTimeout(()=>el.remove(),3800);
- while($('toasts').children.length>3)$('toasts').firstChild.remove();
-}
-function log(message,notify=false){
+function toast(message,warning=false){log(message,false,warning);}
+function log(message,notify=false,warning=false){
  S.messages.unshift({time:time(),text:message});S.messages=S.messages.slice(0,70);
- $('latest-event').textContent=message;$('event-time').textContent=time().slice(0,5);
- if(notify)toast(message);
+ $('latest-event').textContent=message;$('event-time').textContent=time();
+ $('ship-log').classList.toggle('warning',warning);$('message-kind').textContent=warning?'ВНИМАНИЕ':'БОРТОВОЙ КАНАЛ';
  if(S.view==='journal')renderOverlay();
 }
 function beep(freq=680,duration=.08,type='sine',volume=.05,endFreq){
- // Compatibility for quiet telemetry cues; action sounds have dedicated layers.
- if(S.sound)sound.play(freq<300?'impact':duration>.2?'scan':'switch',.35);
+ // Only explicit control actions produce a click. Radar sweep is silent.
+ if(S.sound)sound.play(freq<300?'impact':'switch',Math.min(.3,volume*4));
 }
 function clickSound(){if(S.sound)sound.play('switch',.55);}
 function soundToggle(){
@@ -103,7 +101,7 @@ function initDials(){
 }
 
 function selectTarget(index,notify=false){
- S.target=index%targets.length;const target=targets[S.target];
+ S.target=index%targets.length;for(let attempt=0;attempt<targets.length-1&&targets[S.target].destroyed;attempt++)S.target=(S.target+1)%targets.length;const target=targets[S.target];
  $('radar-target').textContent=target.name;$('weapon-target').textContent=target.name;
  $('target-readout').textContent=`ЦЕЛЬ: ${target.name}`;$('reticle-label').textContent=`${target.name} · ЗАХВАТ`;
  $('reticle').style.left=target.x*100+'%';$('reticle').style.top=target.y*100+'%';
@@ -130,12 +128,13 @@ function launch(){
  if(S.toggles.stealth)return toast('Отключите маскировку, чтобы открыть огонь.',true);
  if(S.energy[2]<5)return toast('Для пуска нужно хотя бы 5% энергии оружия.',true);
  if(S.firing)return toast('Пусковая установка занята.',true);
+ if(!targets[S.target].visible||performance.now()<targets[S.target].destroyedUntil)return toast('Цель вне поля обзора или уже поражена. Выберите другую цель на радаре.',true);
  const slots=S.fireMode==='salvo'?S.ammo.flatMap((v,i)=>v?[i]:[]):S.ammo[S.slot]?[S.slot]:[];
  if(!slots.length)return toast('Нет готовых ракет. Выберите другой слот или пополните боезапас.',true);
  setView('flight');S.firing=true;const target={...targets[S.target]},start=performance.now();
  slots.forEach((slot,i)=>{
   S.ammo[slot]=false;S.reloadAt[slot]=start+6500+i*350;
-  S.burst.push({type:'missile',start:start+i*300,duration:1900,x:target.x,y:target.y,side:slot-1,hit:false,target:target.name});
+  S.burst.push({targetIndex:S.target,type:'missile',start:start+i*300,duration:1900,x:target.x,y:target.y,side:slot-1,hit:false,target:target.name});
  });
  if(S.sound)slots.forEach((_,i)=>setTimeout(()=>sound.play('launch',.85),i*300));log(`${slots.length>1?'Залп':'Пуск'}: ${slots.length} × М-7. Цель: ${target.name}.`,true);renderAmmo();
  setTimeout(()=>{S.firing=false;toggleCover(false);const next=S.ammo.findIndex(Boolean);if(next>=0)S.slot=next;renderAmmo();},slots.length*300+2100);
@@ -215,9 +214,10 @@ function finishJump(){
  const destination=S.jump.destination;S.current=destination;S.destination=null;S.jump=null;S.destroyedUntil=0;S.burst=[];
  $('console').classList.remove('jumping');$('jump-message').hidden=true;$('jump').disabled=false;$('coordinates').disabled=false;
  $('sector').textContent=destination.name;$('view-sector').textContent=destination.name+' / ОРБИТА';$('position').textContent=coordText(destination);
- $('footer-destination').textContent='ГАЛАКТИЧЕСКАЯ СЕТЬ / '+destination.name;$('destination-name').textContent='КУРС ЗАВЕРШЁН';
- createPlanet(destination.hue);selectTarget((S.target+1)%targets.length);log(`Выход из гиперпространства. Сектор ${destination.name}. ${coordText(destination)}.`,true);
- S.planetTravel=0;if(S.sound)sound.play('arrival',.85);updateReadouts();
+ $('footer-destination').textContent='ГАЛАКТИЧЕСКАЯ СЕТЬ / '+destination.name;$('destination-name').textContent='ОРБИТА · '+destination.name;
+ S.orbit={angle:0,altitude:destination.blackHole?1200000:350,radius:destination.blackHole?1800000:6370,body:destination.name};
+ flightScene.arrive(destination,targets,S.distance);selectTarget((S.target+1)%targets.length);log(`Выход из гиперпространства. ${destination.blackHole?'Наблюдательная орбита':'Орбита'} ${destination.name} установлена.`,true);
+ if(S.sound)sound.play('arrival',.85);updateReadouts();
 }
 
 function setView(view){
@@ -241,7 +241,7 @@ function renderOverlay(){
  }else if(S.view==='energy'){
   html+='<h3>РАСПРЕДЕЛЕНИЕ ЭНЕРГИИ</h3>'+S.energy.map((v,i)=>`<div class="system-row"><span>${['ДВИГАТЕЛИ','ЩИТЫ','ОРУЖИЕ','СИСТЕМЫ / ГИПЕРДВИГ.','НАУКА','СВЯЗЬ'][i]}</span><i><em style="width:${v}%"></em></i><b>${v}%</b></div>`).join('')+'<p style="margin-top:18px">Общая мощность — 100%. Поверните регуляторы под экраном. Контур «Системы» питает гипердвигатель. «Наука» влияет на сканирование, «Связь» — на скорость ответа базы.</p><br><button id="overlay-balance" class="primary-button">СБАЛАНСИРОВАТЬ ШИНУ</button>';
  }else if(S.view==='science'){
-  html+=`<h3>АНАЛИЗ СЕКТОРА</h3><div class="nav-summary"><div class="nav-card"><small>СИСТЕМА</small><b>${escapeHTML(S.current.name)}</b></div><div class="nav-card"><small>ОБЪЕКТЫ</small><b>4 КОНТАКТА</b></div></div><p>Датчики отслеживают учебные дроны, ретранслятор и обломки. Сканирование обновляет номер прохода на радаре.</p><br><button id="science-scan" class="primary-button">ЗАПУСТИТЬ СКАНИРОВАНИЕ</button>`;
+  html+=`<h3>АНАЛИЗ СЕКТОРА</h3><div class="nav-summary"><div class="nav-card"><small>СИСТЕМА</small><b>${escapeHTML(S.current.name)}</b></div><div class="nav-card"><small>ОБЪЕКТЫ</small><b>${targets.filter(x=>!x.destroyed).length} КОНТАКТА</b></div></div><p>Датчики отслеживают учебные дроны, ретранслятор и обломки. Сканирование обновляет номер прохода на радаре.</p><br><button id="science-scan" class="primary-button">ЗАПУСТИТЬ СКАНИРОВАНИЕ</button>`;
  }else if(S.view==='systems'){
   const rows=[['ЦЕЛОСТНОСТЬ КОРПУСА',100],['ЖИЗНЕОБЕСПЕЧЕНИЕ',100],['ЗАЩИТНЫЕ ЭКРАНЫ',Math.round(S.shield)],['МОЩНОСТЬ ДВИГАТЕЛЕЙ',S.energy[0]],['ЭНЕРГИЯ ВООРУЖЕНИЯ',S.energy[2]],['ЗАРЯД ГИПЕРДВИГАТЕЛЯ',Math.floor(S.charge)]];
   html+='<h3>ДИАГНОСТИКА КОРАБЛЯ</h3>'+rows.map(([name,value],i)=>`<div class="system-row"><span>${name}</span><i><em style="width:${value}%" data-sysbar="${i}"></em></i><b data-sysvalue="${i}">${value}%</b></div>`).join('');
@@ -277,6 +277,13 @@ function emergencyStop(){
 function updateReadouts(){
  $('distance-flown').textContent=S.distance.toFixed(1)+' КМ';
  $('viewport').dataset.motionSpeed=S.speed.toFixed(1);
+ $('viewport').dataset.flightMode=S.jump?'hyperspace':S.orbit?(S.current.blackHole?'black-hole-orbit':'orbit'):'cruise';
+ $('viewport').dataset.orbitAngle=String(S.orbit?.angle||0);
+ $('viewport').dataset.forwardDistance=S.distance.toFixed(3);
+ $('radar').setAttribute('aria-label','Радар: активных контактов '+targets.filter(x=>!x.destroyed).length);
+ $('viewport').dataset.activeTargets=targets.filter(x=>!x.destroyed).map(x=>x.name).join(',');
+ $('viewport').dataset.targetPosition=targets.map(x=>`${x.x.toFixed(4)},${x.y.toFixed(4)}`).join(';');
+ if(S.orbit){$('view-sector').textContent=S.current.name+' / ОРБИТАЛЬНЫЙ ПОЛЁТ';$('orbit-status').textContent=`${S.current.blackHole?'НАБЛЮДАТЕЛЬНАЯ ОРБИТА':'ВЫСОТА '+formatNumber(S.orbit.altitude)+' КМ'} · ${((S.orbit.angle*180/TAU*2)%360).toFixed(2)}°`;}else $('orbit-status').textContent='ПРЯМОЙ ХОД / ВИД ИЗ КАБИНЫ';
  $('console').style.setProperty('--engine-force',String(clamp(S.speed/40000,0,1.5)));
  $('speed').textContent=S.jump?'ГИПЕР':formatNumber(S.speed);
  $('thrust-value').textContent=S.thrust+'%';$('heading').textContent=S.heading.toFixed(1)+'°';
@@ -316,76 +323,27 @@ function initStars(){
  let seed=704;const rand=()=>{seed=(seed*16807)%2147483647;return(seed-1)/2147483646;};
  stars=Array.from({length:440},()=>({x:rand(),y:rand(),z:rand(),r:rand()*1.2+.3,phase:rand()*TAU}));
 }
-function createPlanet(hue){
- planetsTexture=document.createElement('canvas');planetsTexture.width=480;planetsTexture.height=480;
- const c=planetsTexture.getContext('2d');c.save();c.beginPath();c.arc(240,240,229,0,TAU);c.clip();
- c.fillStyle=`hsl(${hue},36%,17%)`;c.fillRect(0,0,480,480);
- let seed=+hue+1;const rand=()=>{seed=(seed*16807)%2147483647;return(seed-1)/2147483646;};
- for(let i=0;i<80;i++){
-  const x=rand()*480,y=rand()*480,w=rand()*130+10,h=rand()*22+4;
-  c.fillStyle=`hsla(${hue+rand()*25-12},${20+rand()*30}%,${25+rand()*30}%,${rand()*.2+.08})`;
-  c.beginPath();c.ellipse(x,y,w,h,-.3,0,TAU);c.fill();
- }
- for(let i=0;i<24;i++){
-  c.beginPath();c.moveTo(-20,rand()*480);for(let x=-20;x<520;x+=20)c.lineTo(x,200+Math.sin(x*.012+i)*130+i*4);
-  c.strokeStyle=`hsla(${hue+12},25%,80%,.04)`;c.lineWidth=5+rand()*16;c.stroke();
- }
- const shadow=c.createRadialGradient(130,120,30,280,270,260);shadow.addColorStop(0,'#e4faff16');shadow.addColorStop(.45,'#06102622');shadow.addColorStop(1,'#000e');c.fillStyle=shadow;c.fillRect(0,0,480,480);c.restore();
-}
 function drawSpace(t,dt){
  const v=canvases.space;if(!v)return;const{ctx:c,w,h}=v;c.clearRect(0,0,w,h);
  const hue=S.current.hue||211;
  c.fillStyle='#020711';c.fillRect(0,0,w,h);
  const neb=c.createRadialGradient(w*.68,h*.28,0,w*.68,h*.28,w*.7);neb.addColorStop(0,`hsla(${hue},55%,35%,.16)`);neb.addColorStop(.45,`hsla(${hue+15},50%,16%,.09)`);neb.addColorStop(1,'transparent');c.fillStyle=neb;c.fillRect(0,0,w,h);
  if(S.jump){drawJump(c,w,h,t);return;}
- const cx=w*.5,cy=h*.45;
- c.save();c.translate(cx,cy);c.rotate(S.roll*Math.PI/180*.3);c.translate(-cx,-cy+S.pitch*.3);
- for(const star of stars){
-  const dz=reducedMotion?0:dt*clamp(S.speed/40000,0,2)*.22;
-  star.z-=dz;
-  let sx=cx+(star.x-.5)*w*.8/(star.z+.12),sy=cy+(star.y-.5)*h*.8/(star.z+.12);
-  if(star.z<.03||sx<0||sx>w||sy<0||sy>h){star.z=1;star.x=Math.random();star.y=Math.random();sx=cx+(star.x-.5)*w*.8/1.12;sy=cy+(star.y-.5)*h*.8/1.12;}
-  const alpha=clamp(1.1-star.z*.65,.25,1),radius=star.r*(1.15-star.z*.6);
-  c.fillStyle=`rgba(180,224,255,${alpha})`;c.beginPath();c.arc(sx,sy,radius,0,TAU);c.fill();
-  if(dz>0){const tail=Math.min(dz*2.2,.035),px=cx+(star.x-.5)*w*.8/(star.z+tail+.12),py=cy+(star.y-.5)*h*.8/(star.z+tail+.12);
-   c.strokeStyle=`rgba(142,216,255,${alpha*.5})`;c.lineWidth=Math.max(.4,radius*.6);c.beginPath();c.moveTo(px,py);c.lineTo(sx,sy);c.stroke();}
- }
- if(planetsTexture){
-  const size=w*(.66+S.planetTravel*.15),x=-size*.31-S.planetTravel*w*.04,y=h*.66-S.planetTravel*h*.05;
-  const atm=c.createRadialGradient(x+size/2,y+size/2,size*.465,x+size/2,y+size/2,size*.5);atm.addColorStop(0,'transparent');atm.addColorStop(.65,`hsla(${hue},70%,63%,.18)`);atm.addColorStop(1,'transparent');c.fillStyle=atm;c.fillRect(x,y,size,size);
-  c.drawImage(planetsTexture,x,y,size,size);
- }
- // Distant orbital body and a navigation arc.
- c.strokeStyle='#8adfff44';c.lineWidth=.6;
- for(let orbit=1;orbit<=4;orbit++){c.beginPath();c.ellipse(w*.53,h*.52,w*(.18+orbit*.10),h*(.16+orbit*.075),-.24,0,TAU);c.stroke();}
- c.save();c.setLineDash([3,5]);c.strokeStyle='#b9efff99';c.lineWidth=1.2;c.beginPath();c.moveTo(w*.31,h*.62);c.bezierCurveTo(w*.50,h*.62,w*.56,h*.34,w*.79,h*.22);c.stroke();c.restore();
- const moon=c.createRadialGradient(w*.79-3,h*.21-3,0,w*.79,h*.21,11);moon.addColorStop(0,'#a1b6c7');moon.addColorStop(.5,'#42516a');moon.addColorStop(1,'#040914');c.fillStyle=moon;c.beginPath();c.arc(w*.79,h*.21,11,0,TAU);c.fill();
- // Training targets: model silhouettes are visible before and after firing.
- if(t>S.destroyedUntil){targets.forEach((target,i)=>{
-  const x=w*target.x,y=h*target.y,selected=i===S.target;
-  c.save();c.translate(x,y);c.strokeStyle=selected?'#b3dfed':'#668aa5';c.fillStyle='#102b3e';c.lineWidth=1;
-  if(target.kind==='asteroid'){
-   c.beginPath();for(let k=0;k<7;k++){const a=k/7*TAU,r=9+(k%3)*2;c.lineTo(Math.cos(a)*r,Math.sin(a)*r);}c.closePath();c.fill();c.stroke();
-  }else if(target.kind==='beacon'){
-   c.strokeRect(-3,-9,6,18);c.beginPath();c.moveTo(-14,-5);c.lineTo(14,-5);c.moveTo(-14,5);c.lineTo(14,5);c.stroke();
-  }else{
-   c.beginPath();c.moveTo(0,-7);c.lineTo(13,3);c.lineTo(5,6);c.lineTo(-5,6);c.lineTo(-13,3);c.closePath();c.fill();c.stroke();c.fillStyle='#7ce8ff';c.fillRect(-3,4,6,2);
-  }c.restore();
- });}
- c.restore();
+ flightScene.draw(c,w,h,t,S,targets,reducedMotion);
  // Missile trails and impact effects, in monitor coordinates.
  const live=[];
  S.burst.forEach(effect=>{
   const age=t-effect.start;if(age<0){live.push(effect);return;}
   if(effect.type==='missile'){
    const p=clamp(age/effect.duration,0,1),ease=1-Math.pow(1-p,1.5);
+   const movingTarget=targets[effect.targetIndex];if(movingTarget?.visible){effect.x=movingTarget.x;effect.y=movingTarget.y;}
    const sx=w*(.5+effect.side*.25),sy=h*1.08,tx=w*effect.x,ty=h*effect.y;
    const x=sx+(tx-sx)*ease,y=sy+(ty-sy)*ease;
    c.save();c.strokeStyle='#93e9ff';c.lineWidth=(1-p)*2+.5;c.shadowColor='#6dd7ff';c.shadowBlur=12;
    c.beginPath();const back=Math.max(0,ease-.12*(1-p)-.025);c.moveTo(sx+(tx-sx)*back,sy+(ty-sy)*back);c.lineTo(x,y);c.stroke();
    c.fillStyle='#fff1cc';c.beginPath();c.arc(x,y,Math.max(1,3*(1-p)),0,TAU);c.fill();c.restore();
    if(p>=1){
-    effect.type='explosion';effect.start=t;effect.duration=1400;S.destroyedUntil=t+5000;
+    effect.type='explosion';effect.start=t;effect.duration=1400;if(movingTarget){movingTarget.destroyed=true;movingTarget.visible=false;movingTarget.destroyedUntil=Infinity;}
     log(`Попадание: ${effect.target}. Учебная цель поражена.`,true);if(S.sound)sound.play('impact',.75);
    }live.push(effect);
   }else{
@@ -396,7 +354,9 @@ function drawSpace(t,dt){
    }
   }
  });S.burst=live;
- $('reticle').style.visibility=t<S.destroyedUntil?'hidden':'visible';
+ const locked=targets[S.target];$('reticle').style.visibility=locked.visible&&t>(locked.destroyedUntil||0)?'visible':'hidden';
+ $('reticle').style.left=(locked.x*100)+'%';$('reticle').style.top=(locked.y*100)+'%';
+ $('reticle-label').textContent=locked.name+' · '+formatNumber(locked.range||0)+' КМ';
 }
 function drawJump(c,w,h,t){
  const age=t-S.jump.start,p=age/S.jump.duration,cx=w*.5,cy=h*.46;
@@ -439,18 +399,19 @@ function drawRadar(t,dt){
   }
   c.strokeStyle='#a6edff99';c.beginPath();c.moveTo(0,0);c.lineTo(Math.cos(radarAngle)*r,Math.sin(radarAngle)*r);c.stroke();
   targets.forEach((target,i)=>{
+   if(target.destroyed||t<(target.destroyedUntil||0))return;
    const scale=200000/S.range,x=target.rx*r*scale,y=target.ry*r*scale;
    if(Math.hypot(x,y)>r)return;
    const a=Math.atan2(y,x),since=(radarAngle-a+TAU)%TAU,alpha=clamp(1-since/TAU,.25,1);
    c.globalAlpha=alpha;c.fillStyle=i===S.target?'#defbff':'#69cbe7';c.shadowBlur=8;c.shadowColor='#91eaff';
    c.beginPath();c.arc(x,y,i===S.target?3:2,0,TAU);c.fill();c.shadowBlur=0;
    if(i===S.target){c.strokeStyle='#b4eeff';c.lineWidth=1;c.strokeRect(x-7,y-7,14,14);}
-   if(since<.06&&t-lastPing>1200){beep(1050,.045,'sine',.018);lastPing=t;}
+   // Passive radar never emits UI clicks. Active scans have dedicated sonar pulses.
   });
  }
  c.globalAlpha=1;c.fillStyle='#bcf0ff';c.beginPath();c.moveTo(0,-5);c.lineTo(3,4);c.lineTo(0,2);c.lineTo(-3,4);c.closePath();c.fill();
  c.restore();
- if(S.scan>t){const p=clamp(1-(S.scan-t)/8000,0,1);c.strokeStyle=`rgba(165,232,255,${1-p})`;c.lineWidth=2;c.beginPath();c.arc(cx,cy,p*r,0,TAU);c.stroke();}
+ if(S.scan>t){const p=clamp(1-(S.scan-t)/S.scanDuration,0,1);c.strokeStyle=`rgba(165,232,255,${1-p})`;c.lineWidth=2;c.beginPath();c.arc(cx,cy,p*r,0,TAU);c.stroke();}
 }
 function drawTelemetry(t){
  const v=canvases.spectrum;if(v){const{ctx:c,w,h}=v;c.clearRect(0,0,w,h);const bars=38;
@@ -463,7 +424,9 @@ function tick(t){
  if(!S.jump){
   const targetSpeed=S.thrust/71*28400*(.55+S.energy[0]/35*.45)*(S.toggles.stealth?.5:1);
   S.speed+=(targetSpeed-S.speed)*(1-Math.exp(-dt*1.8));if(S.thrust===0&&S.speed<.5)S.speed=0;
-  S.distance+=S.speed/3600*dt;S.planetTravel=Math.min(.9,S.planetTravel+S.speed/40000*dt*.004);
+  S.distance+=Math.max(0,S.speed)/3600*dt;
+  if(S.orbit&&!reducedMotion)S.orbit.angle+=Math.max(0,S.speed)/3600/(S.orbit.radius+S.orbit.altitude)*dt;
+  flightScene.update(dt,t,S,targets,reducedMotion);
   if(S.charge<100&&S.energy[3]>0)S.charge=Math.min(100,S.charge+dt*S.energy[3]/20*(S.toggles.shields?.55:1.05));
   if(!S.toggles.autopilot)S.heading=(S.heading+S.roll*dt*.02+360)%360;
  }
@@ -494,8 +457,8 @@ $('radar').addEventListener('click',e=>{
 $('scan').addEventListener('click',()=>{
  if(S.jump)return toast('Радар недоступен в гиперпространстве.',true);
  if(S.energy[4]<3)return toast('Для сканирования нужно хотя бы 3% энергии научного модуля.',true);
- const scanDuration=clamp(2500*15/S.energy[4],900,8000);S.scan=performance.now()+scanDuration;$('scan').textContent='СКАНИРОВАНИЕ…';$('scan').disabled=true;beep(450,.3,'sine',.04,1400);
- log('Сканирование сектора начато.');setTimeout(()=>{$('scan').textContent='СКАНИРОВАТЬ';$('scan').disabled=false;$('scan-id').textContent=String(Number($('scan-id').textContent)+1).padStart(2,'0');log('Сканирование завершено. Обнаружены 4 учебных объекта.',true);},scanDuration);
+ const scanDuration=clamp(2500*15/S.energy[4],900,8000);S.scanDuration=scanDuration;S.scan=performance.now()+scanDuration;$('scan').textContent='СКАНИРОВАНИЕ…';$('scan').disabled=true;sound.scan(scanDuration);
+ log('Сканирование сектора начато.');setTimeout(()=>{$('scan').textContent='СКАНИРОВАТЬ';$('scan').disabled=false;$('scan-id').textContent=String(Number($('scan-id').textContent)+1).padStart(2,'0');log('Сканирование завершено. Контакты и относительные скорости обновлены.',true);},scanDuration);
 });
 function changeRange(direction){S.range=clamp(S.range*(direction>0?2:.5),50000,800000);$('radar-range').textContent=formatNumber(S.range)+' КМ';clickSound();toast('Дальность радара: '+formatNumber(S.range)+' км.');}
 $('range-down').addEventListener('click',()=>changeRange(-1));$('range-up').addEventListener('click',()=>changeRange(1));
@@ -524,7 +487,7 @@ document.addEventListener('keydown',e=>{
  if(e.key.toLowerCase()==='n')openNav();if(e.key.toLowerCase()==='j')jump();if(e.key.toLowerCase()==='m')soundToggle();
 });
 document.addEventListener('visibilitychange',()=>{lastFrame=performance.now();sound.setHidden(document.hidden);});
-initStars();createPlanet(211);initDials();renderAmmo();selectTarget(0);sizeCanvases();updateReadouts();$('clock').textContent=time();
-log('Мостик готов. Командование передано вам.');log('Учебный сектор: оружие разрешено. Выберите координаты для гиперперехода.');
+initStars();flightScene.resetTargets(targets,S.distance);initDials();renderAmmo();selectTarget(0);sizeCanvases();updateReadouts();$('clock').textContent=time();
+log('Мостик готов. Командование передано вам.');log('Учебный сектор: оружие разрешено. Выберите планету или GARGANTUA для гиперперехода.');
 requestAnimationFrame(tick);
 })();

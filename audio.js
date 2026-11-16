@@ -12,7 +12,7 @@ class ShipAudio {
   for(let ch=0;ch<2;ch++){const a=impulse.getChannelData(ch);for(let i=0;i<a.length;i++)a[i]=(Math.random()*2-1)*Math.exp(-i/(c.sampleRate*.19))*.28;}
   this.room.buffer=impulse;const wet=c.createGain();wet.gain.value=.12;this.room.connect(wet);wet.connect(this.master);
   this.loading=Promise.all(['engine','startup','launch','impact','charge','transit','arrival','reload','switch','scan'].map(async name=>{
-   try{const response=await fetch('sfx-'+name+'.wav');if(!response.ok)throw Error('Audio unavailable');this.buffers[name]=await c.decodeAudioData(await response.arrayBuffer());}catch(_){/* Sound never blocks flight controls. */}
+   try{const response=await fetch('sfx-'+name+'.wav?v=1.2');if(!response.ok)throw Error('Audio unavailable');this.buffers[name]=await c.decodeAudioData(await response.arrayBuffer());}catch(_){/* Sound never blocks flight controls. */}
   })).then(()=>{
    if(this.buffers.engine){const bed=this.bed=c.createBufferSource();bed.buffer=this.buffers.engine;bed.loop=true;
     this.engineFilter=c.createBiquadFilter();this.engineFilter.type='lowpass';this.engineFilter.frequency.value=600;
@@ -22,7 +22,7 @@ class ShipAudio {
   });
  }
  enable(on){
-  this.enabled=on;if(on){this.init();if(this.ctx)this.ctx.resume().catch(()=>{});}this.applyVolume();
+  this.enabled=on;if(!on)this.scanToken=(this.scanToken||0)+1;if(on){this.init();if(this.ctx)this.ctx.resume().catch(()=>{});}this.applyVolume();
  }
  applyVolume(){if(this.ctx)this.master.gain.setTargetAtTime(this.enabled&&!this.hidden?.55:0,this.ctx.currentTime,.15);}
  setHidden(hidden){this.hidden=hidden;this.applyVolume();}
@@ -32,6 +32,11 @@ class ShipAudio {
   const c=this.ctx,source=c.createBufferSource(),gain=c.createGain();source.buffer=this.buffers[name];gain.gain.value=volume;
   source.connect(gain);gain.connect(this.master);if(name!=='engine'&&name!=='switch')gain.connect(this.room);
   source.onended=()=>{source.disconnect();gain.disconnect();};source.start();
+ }
+ scan(duration){
+  const token=this.scanToken=(this.scanToken||0)+1;
+  if(!this.enabled)return;
+  for(let delay=0;delay<duration;delay+=950)setTimeout(()=>{if(this.enabled&&!this.hidden&&this.scanToken===token)this.play('scan',.65);},delay);
  }
  update(speed,thrust,jumping,stealth){
   if(!this.ctx||!this.engineGain)return;const t=this.ctx.currentTime,velocity=Math.min(1.8,Math.max(0,speed/28400));
